@@ -45,18 +45,15 @@ in {
       ACCOUNTS_URL = cfg.url;
       ACCOUNTS_PORT = toString cfg.port;
       ACCOUNTS_DATABASE = "/var/lib/vibetogether-accounts/accounts.db";
-      # The key that signs sessions, made on the first start and kept with the database.
+      # The key that signs sessions, which the service makes on its first start.
       ACCOUNTS_SECRET_FILE = "/var/lib/vibetogether-accounts/secret";
       AGENTWIRE_RELAY = cfg.relay;
       GITHUB_CLIENT_ID = cfg.github.clientId;
-      GITHUB_CLIENT_SECRET_FILE = "%d/github";
     };
-    preStart = ''
-      [ -s "$STATE_DIRECTORY/secret" ] || ${pkgs.openssl}/bin/openssl rand -base64 48 > "$STATE_DIRECTORY/secret"
-    '';
     serviceConfig = {
       ExecStart = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       Restart = "on-failure";
+      # Read by the service from $CREDENTIALS_DIRECTORY/github.
       LoadCredential = "github:${cfg.github.clientSecretFile}";
       DynamicUser = true;
       StateDirectory = "vibetogether-accounts";
