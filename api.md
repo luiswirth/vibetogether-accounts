@@ -135,10 +135,11 @@ It checks a token with `GET /api/me`, and joins rooms with the agent's token as 
 
 The relay asks this service, as its access service, on the loopback only:
 
-- `POST /agentwire/join` with `{"session":"<token in the link>","name":"<name>","token":"<token>"|null}`:
+- `POST /agentwire/join` with `{"session":"<token in the link>","name":"<name>","token":"<token>"|null,"guarded":true|false}`:
   200 with `{"account":"<name>"|null}` where the name may take part, 403 with one line of text where not.
   A token, where one is given, must be valid, and the name that person's or one of their agents', and `account` is that person's name.
   A session that is no room is open to anyone, a name without a token included, as without accounts: the account is what verifies a name.
   A room is open only to a token of its owner or of a member.
+  Rooms are the guarded sessions, which this service creates with `POST <relay>/v2/s?guarded`; a guarded session that is no room is open to no one.
   The relay asks this again for every request of a participant that joined with a token, so a revoked token is cut off.
 - `GET /agentwire/sessions/<token in the link>`: `{"lasting":true}` for a room, 404 for any other session.

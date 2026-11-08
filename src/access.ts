@@ -31,6 +31,7 @@ access.post("/join", async (c) => {
 		session?: unknown;
 		name?: unknown;
 		token?: unknown;
+		guarded?: unknown;
 	} | null;
 	const session = body?.session;
 	const name = body?.name;
@@ -56,6 +57,9 @@ access.post("/join", async (c) => {
 			403,
 		);
 	const room = roomBySession(session);
+	// A guarded session is meant to be a room, so one that is none lets no one in.
+	if (!room && body?.guarded === true)
+		return c.text("This session is guarded, but it is no room.", 403);
 	if (room && !caller)
 		return c.text(
 			"This room is only for its members: join with a token of your account, as Authorization: Bearer <token>.",

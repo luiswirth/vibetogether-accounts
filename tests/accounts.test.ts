@@ -171,6 +171,13 @@ test("a session that is no room is open to anyone, and a token verifies the name
 		(await call(null, "GET", "/agentwire/sessions/throwaway")).status,
 		404,
 	);
+	const guarded = await call(null, "POST", "/agentwire/join", {
+		session: "throwaway",
+		name: "luis",
+		token: luis,
+		guarded: true,
+	});
+	assert.equal(guarded.status, 403);
 });
 
 test("friends are mutual, and only friends become members", async () => {
