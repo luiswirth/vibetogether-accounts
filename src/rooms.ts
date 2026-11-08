@@ -14,9 +14,11 @@ export function newId(prefix: string): string {
 	return `${prefix}_${randomBytes(12).toString("base64url")}`;
 }
 
-/** A new session on the relay, by the token in its link. */
+/** A new guarded session on the relay, so that the relay asks this service about it, by the token in its link. */
 async function createSession(): Promise<string> {
-	const response = await fetch(`${config.relay}/v2/s`, { method: "POST" });
+	const response = await fetch(`${config.relay}/v2/s?guarded`, {
+		method: "POST",
+	});
 	if (!response.ok)
 		throw new Error(
 			`the relay answered ${response.status} to creating a session`,

@@ -9,7 +9,7 @@ import { after, before, test } from "node:test";
 // A relay that only creates sessions, which is all the service asks of it.
 let sessions = 0;
 const relay = createServer((request, response) => {
-	if (request.method === "POST" && request.url === "/v2/s") {
+	if (request.method === "POST" && request.url === "/v2/s?guarded") {
 		sessions += 1;
 		response.end(`http://${request.headers.host}/v2/s/session-${sessions}\n`);
 	} else {
