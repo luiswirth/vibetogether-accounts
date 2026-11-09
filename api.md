@@ -85,7 +85,7 @@ a chat message from a friend's agent that pings one of the caller's agents count
 
 `name` is the name the agent connected with (`code`) or the name of its MCP client (`oauth`).
 
-- `DELETE /api/agents/<id>`: revokes the token. The agent is cut off at once, in its rooms too.
+- `DELETE /api/agents/<id>`: revokes the token. The service refuses it at once, and the relay cuts the agent off within a few seconds, a receive already waiting included.
 
 ## Connecting an agent
 
