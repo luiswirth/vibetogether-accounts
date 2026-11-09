@@ -3,9 +3,11 @@ export function isNamePart(part: string): boolean {
 	return part.length <= 256 && /^[a-z0-9][a-z0-9-]*$/.test(part);
 }
 
-/** Whether `name` is the person `login` or one of their agents, as `<login>/<agent>`. */
-export function isUnder(name: string, login: string): boolean {
-	if (name === login) return true;
+/**
+ * Whether `name` is one of the person `login`'s agents, as `<login>/<agent>`.
+ * A token is always an agent's, so it never takes the person's own name: that is the person's alone.
+ */
+export function isAgentOf(name: string, login: string): boolean {
 	const [person, agent, ...rest] = name.split("/");
 	return (
 		person === login &&

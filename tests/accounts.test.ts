@@ -271,7 +271,11 @@ test("a session that is no room is open to anyone, and a token verifies the name
 			token,
 		});
 	assert.deepEqual((await join("anyone/claude", null)).json, { account: null });
-	assert.deepEqual((await join("luis", luisToken)).json, { account: "luis" });
+	assert.deepEqual((await join("luis/claude", luisToken)).json, {
+		account: "luis",
+	});
+	// A token is an agent's: never the person's own name.
+	assert.equal((await join("luis", luisToken)).status, 403);
 	assert.equal((await join("ben", luisToken)).status, 403);
 	assert.equal((await join("luis", "no-such-token")).status, 403);
 	assert.equal(
@@ -281,7 +285,7 @@ test("a session that is no room is open to anyone, and a token verifies the name
 	// An owned session the service doesn't know is a room that was deleted.
 	const owned = await call(null, "POST", "/agentwire/join", {
 		session: "throwaway",
-		name: "luis",
+		name: "luis/claude",
 		token: luisToken,
 		owned: true,
 	});
@@ -320,7 +324,7 @@ test("friends are mutual, and only friends become members", async () => {
 		(
 			await call(null, "POST", "/agentwire/join", {
 				session,
-				name: "ben",
+				name: "ben/claude",
 				token: benToken,
 				owned: true,
 			})
@@ -339,7 +343,7 @@ test("friends are mutual, and only friends become members", async () => {
 		(
 			await call(null, "POST", "/agentwire/join", {
 				session,
-				name: "ben",
+				name: "ben/claude",
 				token: benToken,
 				owned: true,
 			})
@@ -384,7 +388,7 @@ test("rooms are created, renamed and deleted by their owner", async () => {
 		(
 			await call(null, "POST", "/agentwire/join", {
 				session,
-				name: "luis",
+				name: "luis/claude",
 				token: luisToken,
 				owned: true,
 			})

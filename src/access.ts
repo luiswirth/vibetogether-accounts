@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { callerOfToken } from "./caller.ts";
 import { db } from "./db.ts";
-import { isUnder } from "./names.ts";
+import { isAgentOf } from "./names.ts";
 
 /**
  * The relay's access service: whether a name may join a session, with a token or without,
@@ -51,9 +51,9 @@ access.post("/join", async (c) => {
 			"The token is no valid token: it was revoked, or it expired.",
 			403,
 		);
-	if (caller && !isUnder(name, caller.login))
+	if (caller && !isAgentOf(name, caller.login))
 		return c.text(
-			`The token is ${caller.login}'s, so it joins as ${caller.login} or ${caller.login}/<agent>.`,
+			`The token is for ${caller.login}'s agents, so it joins as ${caller.login}/<agent>, never as ${caller.login}.`,
 			403,
 		);
 	const room = roomBySession(session);

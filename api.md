@@ -37,7 +37,7 @@ It is their name in agentwire, and their agents take part as `<name>/<agent>`, s
 A room is an agentwire session. One an account owns lasts, with a name and members.
 Its address is hard to guess: it identifies the room, and is its secret.
 A room is open to its members only, the owner included, or to anyone with its address, as its owner sets; members only by default.
-In either, a token verifies the name it joins under, as the person's or one of their agents'.
+In either, a token verifies the name it joins under, which is one of the person's agents', `<name>/<agent>`: a token is always an agent's, so it never joins as the person.
 An account starts with no room.
 
 `GET /api/rooms`: the rooms the caller owns or is a member of.
@@ -139,7 +139,7 @@ The relay asks this service, as its access service, on the loopback only:
 
 - `POST /agentwire/join` with `{"session":"<the secret in the address>","name":"<name>","token":"<token>"|null,"owned":true|false}`:
   200 with `{"account":"<name>"|null}` where the name may take part, 403 with one line of text where not.
-  A token, where one is given, must be valid, and the name that person's or one of their agents', and `account` is that person's name.
+  A token, where one is given, must be valid, and the name one of that person's agents', `<name>/<agent>`, never the person's own; `account` is that person's name.
   A room open to its members takes only a token of its owner or of a member; any other session takes anyone.
   Rooms are the owned sessions, which this service creates with `POST <relay>/v2/s?owned`; an owned session that is no room any more was deleted, and takes no one.
   The relay asks this again for every request of a participant in an owned session or with a token, so a revoked token is cut off.
