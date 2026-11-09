@@ -10,4 +10,4 @@ Its interface is `api.md`. Vibe Together's design is in `../project/design.md`, 
 - A token is an opaque Better Auth session token (from a one-time code) or OAuth access token (prefixed `vt_at_`), looked up at each request, so that revoking one cuts its agent off at once.
 - The account page and agents use the same requests: nothing is only for the page.
 - Served from lwirth-cloud (`~/dev/dotcloud`) through `nixosModules.default`, under `vibetogether.agentics.lwirth.com/api/`.
-- `just ci` runs every check. `just dev` runs a local instance against the public relay, `just stack` one with a local relay that asks it, and `just seed <login> [database]` signs a person in on either, since GitHub can't call back to them.
+- `just ci` runs every check. `just dev` runs a local instance against the public relay, `just stack` one with a local relay that asks it, and `just seed <login>` and `just stack-seed <login>` sign a person in on them, since GitHub can't call back to them.
