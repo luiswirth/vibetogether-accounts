@@ -78,11 +78,12 @@ Adding friends and members, and opening a room to its address, is the person's a
 `GET /api/tokens`: the caller's tokens, oldest first.
 
 ```json
-[{"id":"s_…","name":"claude","created":"2026-11-09T00:10:00Z"},
- {"id":"o_…","name":"Claude Code","created":"2026-11-09T00:12:00Z"}]
+[{"id":"s_…","name":"lwirth-server","via":"otp","created":"2026-11-09T00:10:00Z"},
+ {"id":"o_…","name":"Claude Code","via":"mcp","created":"2026-11-09T00:12:00Z"}]
 ```
 
-`name` is the name the agent asked for the OTP with, or the name of its MCP client, so two Claude Codes signed in are two tokens.
+A token from an OTP (`via` is `otp`) is its machine's, which every agent on it uses under whatever name it joins with: `name` is the machine's name, which the agent asked for the OTP with.
+One from an MCP client signing in (`via` is `mcp`) is that client's: `name` is the client's name, so two Claude Codes signed in are two tokens.
 `id` needs no encoding in a path.
 
 - `DELETE /api/tokens/<id>`: revokes the token. The service refuses it at once, and the relay cuts its agent off within a few seconds, a receive already waiting included.
@@ -94,17 +95,17 @@ An agent with a shell gets a token with an OTP, RFC 8628's device authorization:
 
 ```sh
 curl -s -H 'Content-Type: application/json' \
-  -d '{"client_id":"<agent>"}' https://vibetogether.agentics.lwirth.com/api/auth/device/code
+  -d '{"client_id":"<machine>"}' https://vibetogether.agentics.lwirth.com/api/auth/device/code
 ```
 
-`<agent>` is the agent's own part of its name, such as `claude`.
+`<machine>` is the machine's hostname, in lower case, such as `lwirth-server`: the token is the machine's, kept in a file there for every agent on it.
 It returns `user_code`, `verification_uri_complete`, `device_code` and `interval`.
 The agent gives its person the link in `verification_uri_complete`, where they sign in and approve the OTP.
 Meanwhile it asks for the token every `interval` seconds:
 
 ```sh
 curl -s -H 'Content-Type: application/json' \
-  -d '{"grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"<device_code>","client_id":"<agent>"}' \
+  -d '{"grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"<device_code>","client_id":"<machine>"}' \
   https://vibetogether.agentics.lwirth.com/api/auth/device/token
 ```
 
@@ -116,7 +117,7 @@ These are Better Auth's own endpoints, under `/api/auth/`; the account page call
 
 - Sign in: `POST /api/auth/sign-in/social` with `{"provider":"github","callbackURL":"/account/"}`, which returns `{"url":…,"redirect":true}`: go to `url`.
 - Sign out: `POST /api/auth/sign-out`.
-- The OTP: `GET /api/auth/device?user_code=<code>` claims it for the signed-in caller, and returns the agent that asks as `client_id`, and when and from which address it asked as `requested` and `from`.
+- The OTP: `GET /api/auth/device?user_code=<code>` claims it for the signed-in caller, and returns the machine that asks as `client_id`, and when and from which address it asked as `requested` and `from`.
   Then `POST /api/auth/device/approve` or `/api/auth/device/deny` with `{"userCode":"<code>"}`.
   The page is `/account/device/?user_code=<code>`.
 - OAuth, for MCP clients: the authorization server's endpoints are under `/api/auth/oauth2/`, its metadata at `/.well-known/oauth-authorization-server/api/auth`.

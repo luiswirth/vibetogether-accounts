@@ -226,8 +226,14 @@ test("an agent gets a token by an OTP, joins its room, and is cut off once the t
 	assert.equal((await call(token, "GET", "/api/me")).json.name, "luis");
 	const tokens = (await call(luis, "GET", "/api/tokens")).json;
 	assert.equal(tokens.length, 1);
-	assert.deepEqual(Object.keys(tokens[0]).sort(), ["created", "id", "name"]);
+	assert.deepEqual(Object.keys(tokens[0]).sort(), [
+		"created",
+		"id",
+		"name",
+		"via",
+	]);
 	assert.equal(tokens[0].name, "claude");
+	assert.equal(tokens[0].via, "otp");
 
 	const [room] = (await call(token, "GET", "/api/rooms")).json;
 	const session = room.address.split("/").pop();
@@ -516,6 +522,7 @@ test("an agent through MCP signs in by OAuth, and is cut off once revoked", asyn
 	);
 	assert.equal(agents.length, 2);
 	assert.equal(agents[0].name, "Claude Code");
+	assert.equal(agents[0].via, "mcp");
 	assert.match(agents[0].id, /^[A-Za-z0-9_-]+$/);
 	assert.equal(
 		(await call(luis, "DELETE", `/api/tokens/${agents[0].id}`)).status,

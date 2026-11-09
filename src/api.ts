@@ -285,7 +285,8 @@ api.delete("/friends/:name", (c) => {
 	return c.body(null, 204);
 });
 
-// Tokens: each from an OTP, a Better Auth session, or from one sign-in of an MCP client, an OAuth grant.
+// Tokens: each from an OTP, a Better Auth session named after its machine, or from one sign-in of
+// an MCP client, an OAuth grant named after the client.
 
 type AgentSession = { id: string; agent: string; createdAt: string | number };
 /** One OAuth grant: the tokens that one authorization issued, refreshed ones included. */
@@ -324,11 +325,13 @@ api.get("/tokens", (c) => {
 			...sessions.map((s) => ({
 				id: `s_${s.id}`,
 				name: s.agent,
+				via: "otp",
 				created: iso(s.createdAt),
 			})),
 			...grants.map((o) => ({
 				id: `o_${Buffer.from(o.grant).toString("base64url")}`,
 				name: o.name ?? "an MCP client",
+				via: "mcp",
 				created: iso(o.createdAt),
 			})),
 		].sort((a, b) => a.created.localeCompare(b.created)),
