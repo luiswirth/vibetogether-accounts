@@ -254,11 +254,15 @@ api.delete("/friends/:name", (c) => {
 // Agents
 
 type AgentSession = { id: string; agent: string; createdAt: string | number };
-type AgentClient = {
-	clientId: string;
+/** One OAuth grant: the tokens that one authorization issued, refreshed ones included. */
+type AgentGrant = {
+	grant: string;
 	name: string | null;
 	createdAt: string | number;
 };
+
+// The tokens of one grant, by the authorization code that started it, which refreshing keeps.
+const grantKey = "coalesce(t.authorizationCodeId, 'client:' || t.clientId)";
 
 function iso(time: string | number): string {
 	return new Date(time).toISOString();
@@ -271,14 +275,16 @@ api.get("/agents", (c) => {
 			"SELECT id, agent, createdAt FROM session WHERE userId = ? AND agent IS NOT NULL AND expiresAt > ?",
 		)
 		.all(me, Date.now()) as AgentSession[];
-	const clients = db
+	const grants = db
 		.prepare(
-			`SELECT t.clientId, c.name, min(t.createdAt) AS createdAt FROM oauthRefreshToken t
+			`SELECT ${grantKey} AS grant, c.name, min(t.createdAt) AS createdAt
+			 FROM (SELECT authorizationCodeId, clientId, userId, createdAt, expiresAt, revoked FROM oauthRefreshToken
+			       UNION ALL SELECT authorizationCodeId, clientId, userId, createdAt, expiresAt, revoked FROM oauthAccessToken) t
 			 LEFT JOIN oauthClient c ON c.clientId = t.clientId
 			 WHERE t.userId = ? AND t.revoked IS NULL AND t.expiresAt > ?
-			 GROUP BY t.clientId`,
+			 GROUP BY grant ORDER BY createdAt`,
 		)
-		.all(me, Date.now()) as AgentClient[];
+		.all(me, Date.now()) as AgentGrant[];
 	return c.json([
 		...sessions.map((s) => ({
 			id: `s_${s.id}`,
@@ -286,9 +292,9 @@ api.get("/agents", (c) => {
 			kind: "code",
 			created: iso(s.createdAt),
 		})),
-		...clients.map((o) => ({
-			id: `o_${o.clientId}`,
-			name: o.name ?? o.clientId,
+		...grants.map((o) => ({
+			id: `o_${Buffer.from(o.grant).toString("base64url")}`,
+			name: o.name ?? "an MCP client",
 			kind: "oauth",
 			created: iso(o.createdAt),
 		})),
@@ -307,18 +313,17 @@ api.delete("/agents/:id", (c) => {
 		return result.changes ? c.body(null, 204) : c.text("No such agent.", 404);
 	}
 	if (id.startsWith("o_")) {
-		const client = id.slice(2);
+		const grant = Buffer.from(id.slice(2), "base64url").toString();
 		const tokens = db
-			.prepare("DELETE FROM oauthAccessToken WHERE clientId = ? AND userId = ?")
-			.run(client, me);
+			.prepare(
+				`DELETE FROM oauthAccessToken AS t WHERE ${grantKey} = ? AND userId = ?`,
+			)
+			.run(grant, me);
 		const refresh = db
 			.prepare(
-				"DELETE FROM oauthRefreshToken WHERE clientId = ? AND userId = ?",
+				`DELETE FROM oauthRefreshToken AS t WHERE ${grantKey} = ? AND userId = ?`,
 			)
-			.run(client, me);
-		db.prepare(
-			"DELETE FROM oauthConsent WHERE clientId = ? AND userId = ?",
-		).run(client, me);
+			.run(grant, me);
 		return tokens.changes || refresh.changes
 			? c.body(null, 204)
 			: c.text("No such agent.", 404);

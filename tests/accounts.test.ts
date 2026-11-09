@@ -290,74 +290,80 @@ test("an agent through MCP signs in by OAuth, and is cut off once revoked", asyn
 	assert.equal(registered.status, 201, registered.text);
 	const clientId = registered.json.client_id;
 
-	const verifier = randomBytes(32).toString("base64url");
-	const challenge = createHash("sha256").update(verifier).digest("base64url");
-	const query = new URLSearchParams({
-		response_type: "code",
-		client_id: clientId,
-		redirect_uri: redirect,
-		scope: "openid offline_access",
-		state: "s",
-		code_challenge: challenge,
-		code_challenge_method: "S256",
-		resource: "http://localhost:3000/mcp",
-	});
-	const authorize = await app.request(`/api/auth/oauth2/authorize?${query}`, {
-		headers: { authorization: `Bearer ${luis}` },
-	});
-	const consentUrl = new URL(
-		authorize.headers.get("location") ?? (await authorize.text()),
-		"http://localhost:3000",
-	);
-	assert.equal(consentUrl.pathname, "/account/consent/", consentUrl.toString());
-	const consent = await call(luis, "POST", "/api/auth/oauth2/consent", {
-		accept: true,
-		oauth_query: consentUrl.search.slice(1),
-	});
-	assert.equal(consent.status, 200, consent.text);
-	const code = new URL(
-		consent.json.url ?? consent.json.redirect_uri,
-	).searchParams.get("code");
-	assert.ok(code, consent.text);
-
-	const tokenResponse = await app.request("/api/auth/oauth2/token", {
-		method: "POST",
-		headers: { "content-type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({
-			grant_type: "authorization_code",
-			code,
-			redirect_uri: redirect,
+	/** One authorization of the client, which asks for consent only the first time. */
+	async function authorizeOnce(): Promise<string> {
+		const verifier = randomBytes(32).toString("base64url");
+		const challenge = createHash("sha256").update(verifier).digest("base64url");
+		const query = new URLSearchParams({
+			response_type: "code",
 			client_id: clientId,
-			code_verifier: verifier,
+			redirect_uri: redirect,
+			scope: "openid offline_access",
+			state: "s",
+			code_challenge: challenge,
+			code_challenge_method: "S256",
 			resource: "http://localhost:3000/mcp",
-		}),
-	});
-	const tokens = (await tokenResponse.json()) as any;
-	assert.equal(tokenResponse.status, 200, JSON.stringify(tokens));
-	assert.match(tokens.access_token, /^vt_at_/);
-	assert.equal(
-		(await call(tokens.access_token, "GET", "/api/me")).json.name,
-		"luis",
-	);
+		});
+		const authorize = await app.request(`/api/auth/oauth2/authorize?${query}`, {
+			headers: { authorization: `Bearer ${luis}` },
+		});
+		let next = new URL(
+			authorize.headers.get("location") ?? "",
+			"http://localhost:3000",
+		);
+		if (next.pathname === "/account/consent/") {
+			const consent = await call(luis, "POST", "/api/auth/oauth2/consent", {
+				accept: true,
+				oauth_query: next.search.slice(1),
+			});
+			assert.equal(consent.status, 200, consent.text);
+			next = new URL(consent.json.url);
+		}
+		const code = next.searchParams.get("code");
+		assert.ok(code, next.toString());
+		const response = await app.request("/api/auth/oauth2/token", {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({
+				grant_type: "authorization_code",
+				code,
+				redirect_uri: redirect,
+				client_id: clientId,
+				code_verifier: verifier,
+				resource: "http://localhost:3000/mcp",
+			}),
+		});
+		const tokens = (await response.json()) as any;
+		assert.equal(response.status, 200, JSON.stringify(tokens));
+		assert.match(tokens.access_token, /^vt_at_/);
+		return tokens.access_token;
+	}
 
-	const join = () =>
+	const first = await authorizeOnce();
+	const second = await authorizeOnce();
+	assert.equal((await call(first, "GET", "/api/me")).json.name, "luis");
+
+	const join = (token: string) =>
 		call(null, "POST", "/agentwire/join", {
 			session: "throwaway",
 			name: "luis/claude",
-			token: tokens.access_token,
+			token,
 		});
-	assert.deepEqual((await join()).json, { account: "luis" });
+	assert.deepEqual((await join(first)).json, { account: "luis" });
 
-	const agent = (await call(luis, "GET", "/api/agents")).json.find(
+	const agents = (await call(luis, "GET", "/api/agents")).json.filter(
 		(a: any) => a.kind === "oauth",
 	);
-	assert.equal(agent.name, "Claude Code");
+	assert.equal(agents.length, 2);
+	assert.equal(agents[0].name, "Claude Code");
+	assert.match(agents[0].id, /^[A-Za-z0-9_-]+$/);
 	assert.equal(
-		(await call(luis, "DELETE", `/api/agents/${agent.id}`)).status,
+		(await call(luis, "DELETE", `/api/agents/${agents[0].id}`)).status,
 		204,
 	);
-	assert.equal((await join()).status, 403);
-	assert.equal((await call(tokens.access_token, "GET", "/api/me")).status, 401);
+	assert.equal((await join(first)).status, 403);
+	assert.equal((await call(first, "GET", "/api/me")).status, 401);
+	assert.deepEqual((await join(second)).json, { account: "luis" });
 });
 
 test("the OAuth server and the MCP resource are discoverable", async () => {

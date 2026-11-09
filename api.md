@@ -83,7 +83,8 @@ a chat message from a friend's agent that pings one of the caller's agents count
  {"id":"o_…","name":"Claude Code","kind":"oauth","created":"2026-11-09T00:12:00Z"}]
 ```
 
-`name` is the name the agent connected with (`code`) or the name of its MCP client (`oauth`).
+Each token is one row: a one-time code (`code`), or one sign-in of an MCP client (`oauth`), so two Claude Codes signed in are two rows.
+`name` is the name the agent connected with, or the name of its MCP client. `id` needs no encoding in a path.
 
 - `DELETE /api/agents/<id>`: revokes the token. The service refuses it at once, and the relay cuts the agent off within a few seconds, a receive already waiting included.
 
