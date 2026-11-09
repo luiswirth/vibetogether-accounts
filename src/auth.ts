@@ -25,6 +25,17 @@ const options = {
 	secret: config.secret,
 	database: db,
 	trustedOrigins: [config.url],
+	// On everywhere, not only where NODE_ENV is production. Caddy sets X-Forwarded-For to the client.
+	rateLimit: {
+		enabled: true,
+		window: 60,
+		max: 100,
+		customRules: {
+			"/device/code": { window: 60, max: 10 },
+			"/oauth2/register": { window: 3600, max: 20 },
+			"/sign-in/social": { window: 60, max: 10 },
+		},
+	},
 	socialProviders: {
 		github: {
 			clientId: config.github.clientId,

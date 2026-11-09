@@ -73,6 +73,21 @@ async function bodyOf(request: Request): Promise<unknown> {
 
 export const api = new Hono<Env>();
 
+/** The most rooms one account owns, since every room lasts. */
+const maxRooms = 20;
+
+/**
+ * Whether the request is the person's, signed in in the browser, rather than an agent's with a token.
+ * Letting others in, as friends or members, is the person's alone, so that an agent told to by
+ * someone else can't give them a seat in its person's rooms.
+ */
+function isPerson(request: Request): boolean {
+	return !request.headers.has("authorization");
+}
+
+const onlyThePerson =
+	"Only the person does this, signed in in the browser, never with a token.";
+
 api.use(async (c, next) => {
 	const caller = await callerOf(c.req.raw.headers);
 	if (!caller)
@@ -113,6 +128,16 @@ api.get("/rooms", async (c) => {
 });
 
 api.post("/rooms", async (c) => {
+	const owned = (
+		db
+			.prepare("SELECT count(*) AS n FROM room WHERE owner = ?")
+			.get(c.var.caller.id) as { n: number }
+	).n;
+	if (owned >= maxRooms)
+		return c.text(
+			`An account owns at most ${maxRooms} rooms: delete one first.`,
+			403,
+		);
 	const name = roomName(await bodyOf(c.req.raw));
 	if (!name)
 		return c.text(
@@ -147,6 +172,7 @@ api.delete("/rooms/:id", (c) => {
 });
 
 api.put("/rooms/:id/members/:name", async (c) => {
+	if (!isPerson(c.req.raw)) return c.text(onlyThePerson, 403);
 	const room = roomOf(c.req.param("id"));
 	if (!room) return c.text("No such room.", 404);
 	if (room.owner !== c.var.caller.id)
@@ -213,6 +239,7 @@ api.get("/friends", (c) => {
 });
 
 api.put("/friends/:name", async (c) => {
+	if (!isPerson(c.req.raw)) return c.text(onlyThePerson, 403);
 	const me = c.var.caller.id;
 	const person = personByLogin(c.req.param("name"));
 	if (!person) return c.text("No such person.", 404);
@@ -248,6 +275,10 @@ api.delete("/friends/:name", (c) => {
 	db.prepare(
 		`DELETE FROM friend WHERE ("from" = ? AND "to" = ?) OR ("from" = ? AND "to" = ?)`,
 	).run(me, person.id, person.id, me);
+	// Members are friends of the owner, so they leave each other's rooms too.
+	db.prepare(
+		"DELETE FROM member WHERE (user = ? AND room IN (SELECT id FROM room WHERE owner = ?)) OR (user = ? AND room IN (SELECT id FROM room WHERE owner = ?))",
+	).run(person.id, me, me, person.id);
 	return c.body(null, 204);
 });
 
@@ -314,6 +345,18 @@ api.delete("/agents/:id", (c) => {
 	}
 	if (id.startsWith("o_")) {
 		const grant = Buffer.from(id.slice(2), "base64url").toString();
+		// The consent goes too, so that the client asks the person again rather than getting a token silently.
+		const clients = db
+			.prepare(
+				`SELECT DISTINCT clientId FROM (SELECT authorizationCodeId, clientId, userId FROM oauthRefreshToken
+				 UNION ALL SELECT authorizationCodeId, clientId, userId FROM oauthAccessToken) t
+				 WHERE ${grantKey} = ? AND userId = ?`,
+			)
+			.all(grant, me) as { clientId: string }[];
+		for (const { clientId } of clients)
+			db.prepare(
+				"DELETE FROM oauthConsent WHERE clientId = ? AND userId = ?",
+			).run(clientId, me);
 		const tokens = db
 			.prepare(
 				`DELETE FROM oauthAccessToken AS t WHERE ${grantKey} = ? AND userId = ?`,

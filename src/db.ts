@@ -24,6 +24,12 @@ export function migrate(): void {
 			user TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
 			PRIMARY KEY (room, user)
 		);
+		-- Who asked for a one-time code, for the person to judge before approving it.
+		CREATE TABLE IF NOT EXISTS device_request (
+			user_code TEXT PRIMARY KEY,
+			requested TEXT NOT NULL,
+			"from" TEXT NOT NULL
+		);
 		-- One row per side: "from" added "to", and decides whether the agents of "to" ping its own.
 		-- Two people are friends where both rows exist.
 		CREATE TABLE IF NOT EXISTS friend (

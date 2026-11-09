@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { serializeSignedCookie } from "better-call";
 
 // A relay that only creates sessions, which is all the service asks of it.
 let sessions = 0;
@@ -37,25 +38,35 @@ const { auth } = await import("../src/auth.ts");
 
 after(() => relay.close());
 
-/** A person signed in, by the token of a session of theirs. */
-async function person(login: string): Promise<string> {
+/** A person signed in in the browser, by the cookie of a session of theirs, and that session's token. */
+async function person(
+	login: string,
+): Promise<{ cookie: string; token: string }> {
 	const context = await auth.$context;
 	const user = await context.internalAdapter.createUser(
 		{ email: `${login}@example.com`, name: login, login, emailVerified: true },
 		{ method: "admin" },
 	);
 	const session = await context.internalAdapter.createSession(user.id);
-	return session.token;
+	const cookie = await serializeSignedCookie(
+		context.authCookies.sessionToken.name,
+		session.token,
+		context.secret,
+	);
+	return { cookie: `cookie:${cookie.split(";")[0]}`, token: session.token };
 }
 
 async function call(
+	/** A bearer token, or a person's cookie as `cookie:…`. */
 	token: string | null,
 	method: string,
 	path: string,
 	body?: unknown,
 ) {
 	const headers = new Headers({ origin: "http://localhost:3000" });
-	if (token) headers.set("authorization", `Bearer ${token}`);
+	if (token?.startsWith("cookie:"))
+		headers.set("cookie", token.slice("cookie:".length));
+	else if (token) headers.set("authorization", `Bearer ${token}`);
 	if (body !== undefined) headers.set("content-type", "application/json");
 	const response = await app.request(path, {
 		method,
@@ -99,10 +110,12 @@ async function connect(personToken: string, agent: string): Promise<string> {
 
 let luis: string;
 let ben: string;
+let luisToken: string;
+let benToken: string;
 
 before(async () => {
-	luis = await person("luis");
-	ben = await person("ben");
+	({ cookie: luis, token: luisToken } = await person("luis"));
+	({ cookie: ben, token: benToken } = await person("ben"));
 });
 
 test("a request without a token is refused", async () => {
@@ -142,7 +155,7 @@ test("an agent connects with a one-time code, joins its room, and is cut off onc
 	});
 	assert.equal((await join("ben/claude", token)).status, 403);
 	assert.equal((await join("luis/claude", null)).status, 403);
-	assert.equal((await join("ben", ben)).status, 403);
+	assert.equal((await join("ben", benToken)).status, 403);
 	assert.deepEqual(
 		(await call(null, "GET", `/agentwire/sessions/${session}`)).json,
 		{ lasting: true },
@@ -164,8 +177,8 @@ test("a session that is no room is open to anyone, and a token verifies the name
 			token,
 		});
 	assert.deepEqual((await join("anyone/claude", null)).json, { account: null });
-	assert.deepEqual((await join("luis", luis)).json, { account: "luis" });
-	assert.equal((await join("ben", luis)).status, 403);
+	assert.deepEqual((await join("luis", luisToken)).json, { account: "luis" });
+	assert.equal((await join("ben", luisToken)).status, 403);
 	assert.equal((await join("luis", "no-such-token")).status, 403);
 	assert.equal(
 		(await call(null, "GET", "/agentwire/sessions/throwaway")).status,
@@ -174,7 +187,7 @@ test("a session that is no room is open to anyone, and a token verifies the name
 	const guarded = await call(null, "POST", "/agentwire/join", {
 		session: "throwaway",
 		name: "luis",
-		token: luis,
+		token: luisToken,
 		guarded: true,
 	});
 	assert.equal(guarded.status, 403);
@@ -218,7 +231,7 @@ test("friends are mutual, and only friends become members", async () => {
 			await call(null, "POST", "/agentwire/join", {
 				session,
 				name: "ben",
-				token: ben,
+				token: benToken,
 			})
 		).json,
 		{
@@ -236,7 +249,7 @@ test("friends are mutual, and only friends become members", async () => {
 			await call(null, "POST", "/agentwire/join", {
 				session,
 				name: "ben",
-				token: ben,
+				token: benToken,
 			})
 		).status,
 		403,
@@ -291,6 +304,7 @@ test("an agent through MCP signs in by OAuth, and is cut off once revoked", asyn
 	const clientId = registered.json.client_id;
 
 	/** One authorization of the client, which asks for consent only the first time. */
+	let consentAsked = false;
 	async function authorizeOnce(): Promise<string> {
 		const verifier = randomBytes(32).toString("base64url");
 		const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -305,13 +319,14 @@ test("an agent through MCP signs in by OAuth, and is cut off once revoked", asyn
 			resource: "http://localhost:3000/mcp",
 		});
 		const authorize = await app.request(`/api/auth/oauth2/authorize?${query}`, {
-			headers: { authorization: `Bearer ${luis}` },
+			headers: { cookie: luis.slice("cookie:".length) },
 		});
 		let next = new URL(
 			authorize.headers.get("location") ?? "",
 			"http://localhost:3000",
 		);
-		if (next.pathname === "/account/consent/") {
+		consentAsked = next.pathname === "/account/consent/";
+		if (consentAsked) {
 			const consent = await call(luis, "POST", "/api/auth/oauth2/consent", {
 				accept: true,
 				oauth_query: next.search.slice(1),
@@ -361,9 +376,15 @@ test("an agent through MCP signs in by OAuth, and is cut off once revoked", asyn
 		(await call(luis, "DELETE", `/api/agents/${agents[0].id}`)).status,
 		204,
 	);
-	assert.equal((await join(first)).status, 403);
-	assert.equal((await call(first, "GET", "/api/me")).status, 401);
-	assert.deepEqual((await join(second)).json, { account: "luis" });
+	// Both sign-ins can share a second, so either may be listed first: exactly one is cut off.
+	const cut = (await join(first)).status === 403 ? first : second;
+	const kept = cut === first ? second : first;
+	assert.equal((await join(cut)).status, 403);
+	assert.equal((await call(cut, "GET", "/api/me")).status, 401);
+	assert.deepEqual((await join(kept)).json, { account: "luis" });
+	// Revoking took the consent too, so the client asks the person again.
+	await authorizeOnce();
+	assert.ok(consentAsked);
 });
 
 test("the OAuth server and the MCP resource are discoverable", async () => {
@@ -381,4 +402,114 @@ test("the OAuth server and the MCP resource are discoverable", async () => {
 	);
 	assert.equal(resource.status, 200, resource.text);
 	assert.equal(resource.json.resource, "http://localhost:3000/mcp");
+});
+
+test("a token reaches none of Better Auth's endpoints for sessions, the user, consent or approval", async () => {
+	const token = await connect(luis, "walker");
+	const routes: [string, string, unknown?][] = [
+		["GET", "/api/auth/get-session"],
+		["GET", "/api/auth/list-sessions"],
+		["POST", "/api/auth/revoke-session", { token: luisToken }],
+		["POST", "/api/auth/revoke-sessions", {}],
+		["POST", "/api/auth/revoke-other-sessions", {}],
+		["POST", "/api/auth/update-user", { name: "someone else" }],
+		["POST", "/api/auth/delete-user", {}],
+		["GET", "/api/auth/list-accounts"],
+		["POST", "/api/auth/unlink-account", { providerId: "github" }],
+		["POST", "/api/auth/sign-out", {}],
+		["GET", "/api/auth/device?user_code=ABCDEFGH"],
+		["POST", "/api/auth/device/approve", { userCode: "ABCDEFGH" }],
+		["POST", "/api/auth/device/deny", { userCode: "ABCDEFGH" }],
+		["POST", "/api/auth/oauth2/consent", { accept: true, oauth_query: "" }],
+		["POST", "/api/auth/oauth2/continue", { postLogin: true }],
+		["GET", "/api/auth/oauth2/get-consents"],
+		[
+			"POST",
+			"/api/auth/oauth2/create-client",
+			{ redirect_uris: ["https://evil.example/cb"] },
+		],
+	];
+	for (const [method, path, body] of routes)
+		assert.equal(
+			(await call(token, method, path, body)).status,
+			403,
+			`${method} ${path}`,
+		);
+	assert.equal(
+		(await call(luis, "GET", "/api/auth/list-sessions")).status,
+		200,
+	);
+	assert.equal((await call(token, "GET", "/api/me")).status, 200);
+});
+
+test("only the person adds friends and members, never an agent's token", async () => {
+	const token = await connect(ben, "helper");
+	assert.equal((await call(token, "PUT", "/api/friends/luis")).status, 403);
+	const [room] = (await call(token, "GET", "/api/rooms")).json;
+	assert.equal(
+		(await call(token, "PUT", `/api/rooms/${room.id}/members/luis`)).status,
+		403,
+	);
+});
+
+test("unfriending takes each out of the other's rooms", async () => {
+	const { cookie: carol } = await person("carol");
+	await call(luis, "PUT", "/api/friends/carol");
+	await call(carol, "PUT", "/api/friends/luis");
+	const [room] = (await call(luis, "GET", "/api/rooms")).json;
+	assert.deepEqual(
+		(await call(luis, "PUT", `/api/rooms/${room.id}/members/carol`)).json
+			.members,
+		["carol"],
+	);
+	assert.equal((await call(carol, "DELETE", "/api/friends/luis")).status, 204);
+	assert.deepEqual((await call(luis, "GET", "/api/rooms")).json[0].members, []);
+});
+
+test("an account owns at most 20 rooms", async () => {
+	const { cookie: dora } = await person("dora");
+	for (let i = 1; i < 20; i++)
+		assert.equal(
+			(await call(dora, "POST", "/api/rooms", { name: `r${i}` })).status,
+			201,
+		);
+	assert.equal(
+		(await call(dora, "POST", "/api/rooms", { name: "one too many" })).status,
+		403,
+	);
+});
+
+test("a one-time code's page says when and from where it was asked for", async () => {
+	const response = await app.request("/api/auth/device/code", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"x-forwarded-for": "203.0.113.7",
+		},
+		body: JSON.stringify({ client_id: "stranger" }),
+	});
+	const code = (await response.json()) as any;
+	const page = await call(
+		luis,
+		"GET",
+		`/api/auth/device?user_code=${code.user_code}`,
+	);
+	assert.equal(page.json.client_id, "stranger");
+	assert.equal(page.json.from, "203.0.113.7");
+	assert.ok(Date.now() - Date.parse(page.json.requested) < 10_000);
+});
+
+test("asking for one-time codes is rate limited", async () => {
+	const ask = () =>
+		app.request("/api/auth/device/code", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-forwarded-for": "198.51.100.9",
+			},
+			body: JSON.stringify({ client_id: "flood" }),
+		});
+	const statuses = [];
+	for (let i = 0; i < 12; i++) statuses.push((await ask()).status);
+	assert.ok(statuses.includes(429), statuses.join(" "));
 });
