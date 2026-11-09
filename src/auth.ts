@@ -43,10 +43,13 @@ const options = {
 			mapProfileToUser: (profile) => ({ login: profile.login.toLowerCase() }),
 		},
 	},
+	// The login is input, since Better Auth takes only input fields from a provider's profile, so
+	// no request may update the user afterwards.
+	disabledPaths: ["/update-user"],
 	user: {
 		additionalFields: {
 			// The person's name in agentwire, from their GitHub login.
-			login: { type: "string", required: true, unique: true, input: false },
+			login: { type: "string", required: true, unique: true },
 		},
 	},
 	session: {

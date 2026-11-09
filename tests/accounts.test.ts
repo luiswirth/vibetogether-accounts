@@ -118,6 +118,81 @@ before(async () => {
 	({ cookie: ben, token: benToken } = await person("ben"));
 });
 
+test("a person signs in with GitHub, and is named by their login", async () => {
+	// GitHub's side of the sign-in, as Better Auth's provider calls it.
+	const realFetch = globalThis.fetch;
+	globalThis.fetch = (async (
+		input: string | URL | Request,
+		init?: RequestInit,
+	) => {
+		const url = String(input instanceof Request ? input.url : input);
+		const json = (body: unknown) => Response.json(body);
+		if (url.startsWith("https://github.com/login/oauth/access_token"))
+			return json({
+				access_token: "gho_test",
+				token_type: "bearer",
+				scope: "read:user,user:email",
+			});
+		if (url === "https://api.github.com/user")
+			return json({
+				id: 4242,
+				login: "OctoCat",
+				name: null,
+				email: null,
+				avatar_url: "https://avatars.example/4242",
+			});
+		if (url === "https://api.github.com/user/emails")
+			return json([
+				{ email: "octocat@example.com", primary: true, verified: true },
+			]);
+		return realFetch(input, init);
+	}) as typeof fetch;
+	try {
+		const started = await app.request("/api/auth/sign-in/social", {
+			method: "POST",
+			headers: {
+				origin: "http://localhost:3000",
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({ provider: "github", callbackURL: "/account/" }),
+		});
+		assert.equal(started.status, 200, await started.clone().text());
+		const state = new URL(((await started.json()) as any).url).searchParams.get(
+			"state",
+		);
+		const cookie = started.headers
+			.getSetCookie()
+			.map((c) => c.split(";")[0])
+			.join("; ");
+		const back = await app.request(
+			`/api/auth/callback/github?code=test&state=${state}`,
+			{ headers: { cookie } },
+		);
+		const location = back.headers.get("location") ?? "";
+		assert.equal(back.status, 302, location);
+		assert.equal(location, "/account/");
+		const session = back.headers
+			.getSetCookie()
+			.map((c) => c.split(";")[0])
+			.join("; ");
+		assert.equal(
+			(await call(`cookie:${session}`, "GET", "/api/me")).json.name,
+			"octocat",
+		);
+		// The login is input to Better Auth, so no request may change it afterwards.
+		assert.equal(
+			(
+				await call(`cookie:${session}`, "POST", "/api/auth/update-user", {
+					login: "luis",
+				})
+			).status,
+			404,
+		);
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+});
+
 test("a request without a token is refused", async () => {
 	assert.equal((await call(null, "GET", "/api/me")).status, 401);
 });
