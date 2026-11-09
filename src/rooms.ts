@@ -8,24 +8,25 @@ export type RoomRow = {
 	owner: string;
 	session: string | null;
 	created: string;
+	open: "members" | "link";
 };
 
 export function newId(prefix: string): string {
 	return `${prefix}_${randomBytes(12).toString("base64url")}`;
 }
 
-/** A new guarded session on the relay, so that the relay asks this service about it, by the token in its link. */
+/** A new owned session on the relay, so that the relay asks this service about it, by the token in its address. */
 async function createSession(): Promise<string> {
-	const response = await fetch(`${config.relay}/v2/s?guarded`, {
+	const response = await fetch(`${config.relay}/v2/s?owned`, {
 		method: "POST",
 	});
 	if (!response.ok)
 		throw new Error(
 			`the relay answered ${response.status} to creating a session`,
 		);
-	const link = (await response.text()).trim();
-	const token = link.split("/").pop();
-	if (!token) throw new Error(`the relay returned no link: ${link}`);
+	const address = (await response.text()).trim();
+	const token = address.split("/").pop();
+	if (!token) throw new Error(`the relay returned no address: ${address}`);
 	return token;
 }
 
@@ -48,6 +49,7 @@ export async function sessionOf(room: RoomRow): Promise<string> {
 export async function createRoom(
 	owner: string,
 	name: string,
+	open: RoomRow["open"],
 ): Promise<RoomRow> {
 	const room: RoomRow = {
 		id: newId("r"),
@@ -55,10 +57,11 @@ export async function createRoom(
 		owner,
 		session: null,
 		created: new Date().toISOString(),
+		open,
 	};
 	db.prepare(
-		"INSERT INTO room (id, name, owner, session, created) VALUES (?, ?, ?, ?, ?)",
-	).run(room.id, room.name, room.owner, room.session, room.created);
+		"INSERT INTO room (id, name, owner, session, created, open) VALUES (?, ?, ?, ?, ?, ?)",
+	).run(room.id, room.name, room.owner, room.session, room.created, room.open);
 	try {
 		room.session = await sessionOf(room);
 	} catch (error) {
@@ -67,6 +70,6 @@ export async function createRoom(
 	return room;
 }
 
-export function linkOf(session: string): string {
+export function addressOf(session: string): string {
 	return `${config.relay}/v2/s/${session}`;
 }

@@ -31,5 +31,5 @@ stack url="http://localhost:5173":
     ACCOUNTS_URL={{ url }} ACCOUNTS_PORT=8798 ACCOUNTS_DATABASE=.stack/accounts.db ACCOUNTS_SECRET=a-local-secret-that-is-only-for-development \
       GITHUB_CLIENT_ID=Ov23lioG1e2zHhmOML3d GITHUB_CLIENT_SECRET=none AGENTWIRE_RELAY=http://127.0.0.1:8797 node src/main.ts
 
-# Signs `login` in on `just stack`'s instance, whose first room lives on the stack's relay.
+# Signs `login` in on `just stack`'s instance, whose rooms live on the stack's relay.
 stack-seed login: (seed login ".stack/accounts.db" "http://localhost:5173" "http://127.0.0.1:8797")

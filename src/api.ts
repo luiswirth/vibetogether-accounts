@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { type Caller, callerOf } from "./caller.ts";
 import { db } from "./db.ts";
-import { createRoom, linkOf, type RoomRow, sessionOf } from "./rooms.ts";
+import { addressOf, createRoom, type RoomRow, sessionOf } from "./rooms.ts";
 
 type Env = { Variables: { caller: Caller } };
 
@@ -39,9 +39,9 @@ async function roomJson(room: RoomRow) {
 			"SELECT u.login FROM member m JOIN user u ON u.id = m.user WHERE m.room = ? ORDER BY u.login",
 		)
 		.all(room.id) as { login: string }[];
-	let link: string | null = null;
+	let address: string | null = null;
 	try {
-		link = linkOf(await sessionOf(room));
+		address = addressOf(await sessionOf(room));
 	} catch (error) {
 		console.error(`room ${room.id} has no session yet:`, error);
 	}
@@ -50,15 +50,32 @@ async function roomJson(room: RoomRow) {
 		name: room.name,
 		owner: loginOf(room.owner),
 		members: members.map((m) => m.login),
-		link,
+		open: room.open,
+		address,
 	};
 }
 
-function roomName(body: unknown): string | undefined {
-	const name = (body as { name?: unknown } | null)?.name;
-	if (typeof name !== "string") return undefined;
-	const trimmed = name.trim();
-	return trimmed.length > 0 && trimmed.length <= 100 ? trimmed : undefined;
+type RoomInput = { name?: string; open?: RoomRow["open"] };
+
+const roomInputHelp =
+	'The body is {"name":"…","open":"members"|"link"}, each optional where the room exists, with a name of at most 100 characters.';
+
+/** A room's name and who it is open to, as a request gives them, or undefined where they are malformed. */
+function roomInput(body: unknown): RoomInput | undefined {
+	if (body === null || typeof body !== "object") return undefined;
+	const { name, open } = body as { name?: unknown; open?: unknown };
+	const input: RoomInput = {};
+	if (name !== undefined) {
+		if (typeof name !== "string") return undefined;
+		const trimmed = name.trim();
+		if (trimmed.length === 0 || trimmed.length > 100) return undefined;
+		input.name = trimmed;
+	}
+	if (open !== undefined) {
+		if (open !== "members" && open !== "link") return undefined;
+		input.open = open;
+	}
+	return input;
 }
 
 async function bodyOf(request: Request): Promise<unknown> {
@@ -73,13 +90,13 @@ async function bodyOf(request: Request): Promise<unknown> {
 
 export const api = new Hono<Env>();
 
-/** The most rooms one account owns, since every room lasts. */
+/** The most rooms one account owns, since every room it owns lasts. */
 const maxRooms = 20;
 
 /**
  * Whether the request is the person's, signed in in the browser, rather than an agent's with a token.
- * Letting others in, as friends or members, is the person's alone, so that an agent told to by
- * someone else can't give them a seat in its person's rooms.
+ * Letting others in, as friends, members or by opening a room to its address, is the person's
+ * alone, so that an agent told to by someone else can't give them a seat in its person's rooms.
  */
 function isPerson(request: Request): boolean {
 	return !request.headers.has("authorization");
@@ -138,28 +155,34 @@ api.post("/rooms", async (c) => {
 			`An account owns at most ${maxRooms} rooms: delete one first.`,
 			403,
 		);
-	const name = roomName(await bodyOf(c.req.raw));
-	if (!name)
-		return c.text(
-			'A room needs a name: {"name":"…"}, of at most 100 characters.',
-			400,
-		);
-	return c.json(await roomJson(await createRoom(c.var.caller.id, name)), 201);
+	const input = roomInput(await bodyOf(c.req.raw));
+	if (!input?.name) return c.text(roomInputHelp, 400);
+	if (input.open === "link" && !isPerson(c.req.raw))
+		return c.text(onlyThePerson, 403);
+	return c.json(
+		await roomJson(
+			await createRoom(c.var.caller.id, input.name, input.open ?? "members"),
+		),
+		201,
+	);
 });
 
 api.patch("/rooms/:id", async (c) => {
 	const room = roomOf(c.req.param("id"));
 	if (!room) return c.text("No such room.", 404);
 	if (room.owner !== c.var.caller.id)
-		return c.text("Only the room's owner renames it.", 403);
-	const name = roomName(await bodyOf(c.req.raw));
-	if (!name)
-		return c.text(
-			'A room needs a name: {"name":"…"}, of at most 100 characters.',
-			400,
-		);
-	db.prepare("UPDATE room SET name = ? WHERE id = ?").run(name, room.id);
-	return c.json(await roomJson({ ...room, name }));
+		return c.text("Only the room's owner changes it.", 403);
+	const input = roomInput(await bodyOf(c.req.raw));
+	if (!input) return c.text(roomInputHelp, 400);
+	if (input.open === "link" && !isPerson(c.req.raw))
+		return c.text(onlyThePerson, 403);
+	const changed = { ...room, ...input };
+	db.prepare("UPDATE room SET name = ?, open = ? WHERE id = ?").run(
+		changed.name,
+		changed.open,
+		room.id,
+	);
+	return c.json(await roomJson(changed));
 });
 
 api.delete("/rooms/:id", (c) => {
@@ -210,8 +233,7 @@ api.get("/friends", (c) => {
 	const me = c.var.caller.id;
 	const rows = db
 		.prepare(
-			`SELECT u.login, u.name, u.image, mine.agents AS agents,
-			        mine."from" IS NOT NULL AS added, theirs."from" IS NOT NULL AS addedBy
+			`SELECT u.login, u.name, u.image, mine."from" IS NOT NULL AS added, theirs."from" IS NOT NULL AS addedBy
 			 FROM user u
 			 LEFT JOIN friend mine ON mine."from" = ? AND mine."to" = u.id
 			 LEFT JOIN friend theirs ON theirs."from" = u.id AND theirs."to" = ?
@@ -222,7 +244,6 @@ api.get("/friends", (c) => {
 		login: string;
 		name: string;
 		image: string | null;
-		agents: string | null;
 		added: number;
 		addedBy: number;
 	}[];
@@ -233,7 +254,6 @@ api.get("/friends", (c) => {
 			image: row.image,
 			state:
 				row.added && row.addedBy ? "friends" : row.added ? "asked" : "asking",
-			agents: row.agents ?? "fyi",
 		})),
 	);
 });
@@ -245,26 +265,9 @@ api.put("/friends/:name", async (c) => {
 	if (!person) return c.text("No such person.", 404);
 	if (person.id === me)
 		return c.text("You can't add yourself as a friend.", 400);
-	const body = await bodyOf(c.req.raw);
-	const agents = (body as { agents?: unknown } | null)?.agents;
-	if (
-		body === undefined ||
-		(agents !== undefined && agents !== "ping" && agents !== "fyi")
-	)
-		return c.text(
-			'The body is empty, or {"agents":"ping"} or {"agents":"fyi"}.',
-			400,
-		);
 	db.prepare(
-		`INSERT INTO friend ("from", "to", agents, created) VALUES (?, ?, ?, ?)
-		 ON CONFLICT ("from", "to") DO UPDATE SET agents = coalesce(?, agents)`,
-	).run(
-		me,
-		person.id,
-		agents ?? "fyi",
-		new Date().toISOString(),
-		agents ?? null,
-	);
+		`INSERT OR IGNORE INTO friend ("from", "to", created) VALUES (?, ?, ?)`,
+	).run(me, person.id, new Date().toISOString());
 	return c.body(null, 204);
 });
 
@@ -282,7 +285,7 @@ api.delete("/friends/:name", (c) => {
 	return c.body(null, 204);
 });
 
-// Agents
+// Tokens: each from an OTP, a Better Auth session, or from one sign-in of an MCP client, an OAuth grant.
 
 type AgentSession = { id: string; agent: string; createdAt: string | number };
 /** One OAuth grant: the tokens that one authorization issued, refreshed ones included. */
@@ -299,7 +302,7 @@ function iso(time: string | number): string {
 	return new Date(time).toISOString();
 }
 
-api.get("/agents", (c) => {
+api.get("/tokens", (c) => {
 	const me = c.var.caller.id;
 	const sessions = db
 		.prepare(
@@ -316,23 +319,23 @@ api.get("/agents", (c) => {
 			 GROUP BY grant ORDER BY createdAt`,
 		)
 		.all(me, Date.now()) as AgentGrant[];
-	return c.json([
-		...sessions.map((s) => ({
-			id: `s_${s.id}`,
-			name: s.agent,
-			kind: "code",
-			created: iso(s.createdAt),
-		})),
-		...grants.map((o) => ({
-			id: `o_${Buffer.from(o.grant).toString("base64url")}`,
-			name: o.name ?? "an MCP client",
-			kind: "oauth",
-			created: iso(o.createdAt),
-		})),
-	]);
+	return c.json(
+		[
+			...sessions.map((s) => ({
+				id: `s_${s.id}`,
+				name: s.agent,
+				created: iso(s.createdAt),
+			})),
+			...grants.map((o) => ({
+				id: `o_${Buffer.from(o.grant).toString("base64url")}`,
+				name: o.name ?? "an MCP client",
+				created: iso(o.createdAt),
+			})),
+		].sort((a, b) => a.created.localeCompare(b.created)),
+	);
 });
 
-api.delete("/agents/:id", (c) => {
+api.delete("/tokens/:id", (c) => {
 	const me = c.var.caller.id;
 	const id = c.req.param("id");
 	if (id.startsWith("s_")) {
@@ -341,7 +344,7 @@ api.delete("/agents/:id", (c) => {
 				"DELETE FROM session WHERE id = ? AND userId = ? AND agent IS NOT NULL",
 			)
 			.run(id.slice(2), me);
-		return result.changes ? c.body(null, 204) : c.text("No such agent.", 404);
+		return result.changes ? c.body(null, 204) : c.text("No such token.", 404);
 	}
 	if (id.startsWith("o_")) {
 		const grant = Buffer.from(id.slice(2), "base64url").toString();
@@ -369,7 +372,7 @@ api.delete("/agents/:id", (c) => {
 			.run(grant, me);
 		return tokens.changes || refresh.changes
 			? c.body(null, 204)
-			: c.text("No such agent.", 404);
+			: c.text("No such token.", 404);
 	}
-	return c.text("No such agent.", 404);
+	return c.text("No such token.", 404);
 });

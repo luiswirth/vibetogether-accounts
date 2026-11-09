@@ -21,7 +21,7 @@ const tokenEndpoints = new Set([
 	"/api/auth/oauth2/userinfo",
 ]);
 
-// Better Auth's own: signing in, one-time codes, and the OAuth server with its metadata.
+// Better Auth's own: signing in, OTPs, and the OAuth server with its metadata.
 app.on(["GET", "POST"], ["/api/auth/*", "/.well-known/*"], async (c) => {
 	if (
 		c.req.header("authorization") &&
@@ -46,7 +46,7 @@ function addressOf(request: Request): string {
 	);
 }
 
-/** Asks for a one-time code, and keeps when and from where, which the code's page shows. */
+/** Asks for an OTP, and keeps when and from where, which the OTP's page shows. */
 async function withRequester(request: Request): Promise<Response> {
 	const from = addressOf(request);
 	const response = await auth.handler(request);
@@ -63,7 +63,7 @@ async function withRequester(request: Request): Promise<Response> {
 	return response;
 }
 
-/** A one-time code as Better Auth gives it, with when and from where it was asked for. */
+/** An OTP as Better Auth gives it, with when and from where it was asked for. */
 async function withRequestOf(request: Request): Promise<Response> {
 	const response = await auth.handler(request);
 	if (!response.ok) return response;

@@ -1,6 +1,6 @@
 # Vibe Together accounts
 
-The account service of Vibe Together: people sign in with GitHub, and their account holds their rooms, their friends and their agents' tokens.
+The account service of Vibe Together: people sign in with GitHub, and their account holds their rooms, their friends and their tokens.
 It is served under `https://vibetogether.agentics.lwirth.com/api/`.
 A person through the account page and an agent through `curl` use the same requests.
 
@@ -13,14 +13,13 @@ Every request under `/api/` is from an account, by one of:
 
 A request without either is answered with 401.
 
-A token is an agent's.
-An agent gets one in one of two ways:
+A token acts for the whole account, as the person does, held by an agent or its harness.
+It is created in one of two ways:
 
-- With a one-time code, for an agent with only a shell, or a messenger: see "Connecting an agent".
-- With OAuth, for an agent through the MCP server, whose MCP client does it on its own.
+- With an OTP, which the person approves, for an agent with a shell, or a messenger: see "Getting a token".
+- By an MCP client signing in, for an agent through the MCP server, which its client does on its own.
 
-A token acts for the whole account, as the person does.
-It lasts until it is revoked; one from a code also ends after 90 days unused.
+It lasts until it is revoked; one from an OTP also ends after 90 days unused.
 
 ## The account
 
@@ -35,62 +34,63 @@ It is their name in agentwire, and their agents take part as `<name>/<agent>`, s
 
 ## Rooms
 
-A room is a lasting agentwire session, with a name, an owner and members.
-Only its owner and its members join it, each as themselves or as one of their agents.
-Its first room, `agents`, is created with the account, for the person's own agents.
+A room is an agentwire session. One an account owns lasts, with a name and members.
+Its address is hard to guess: it identifies the room, and is its secret.
+A room is open to its members only, the owner included, or to anyone with its address, as its owner sets; members only by default.
+In either, a token verifies the name it joins under, as the person's or one of their agents'.
+An account starts with no room.
 
 `GET /api/rooms`: the rooms the caller owns or is a member of.
 
 ```json
-[{"id":"r_8f2k…","name":"agents","owner":"luiswirth","members":[],"link":"https://agentwire.agentics.lwirth.com/v2/s/<token>"}]
+[{"id":"r_8f2k…","name":"ben","owner":"luiswirth","members":["benarmstrong"],"open":"members","address":"https://agentwire.agentics.lwirth.com/v2/s/<secret>"}]
 ```
 
 `members` holds everyone but the owner.
-`link` is the session's link: join it as the transport says, with the token as `Authorization: Bearer <token>` on the join.
+`open` is `members` or `link`.
+Join a room at its `address` as the transport says, with the token as `Authorization: Bearer <token>` on the join.
 
-- `POST /api/rooms` with `{"name":"…"}`: creates a room, owned by the caller, and returns it.
-- `PATCH /api/rooms/<id>` with `{"name":"…"}`: renames it. Owner only.
-- `DELETE /api/rooms/<id>`: deletes it. Owner only. The session is deleted once it is idle, as any other session is.
+- `POST /api/rooms` with `{"name":"…"}`, and `"open"` where it isn't `members`: creates a room, owned by the caller, and returns it.
+- `PATCH /api/rooms/<id>` with `{"name":"…"}`, `{"open":"members"|"link"}` or both: changes it. Owner only.
+- `DELETE /api/rooms/<id>`: deletes it. Owner only. Nobody joins it any more, and the relay deletes it once nobody is in it.
 - `PUT /api/rooms/<id>/members/<name>`: adds a friend of the owner. Owner only.
 - `DELETE /api/rooms/<id>/members/<name>`: removes a member. The owner removes anyone, a member themselves.
 
 ## Friends
 
 Friends are mutual: two people are friends once each has added the other.
-Each sets, for each friend, whether the friend's agents may wake their own agents (`ping`) or only inform them (`fyi`).
+Only friends of a room's owner become its members.
 
 `GET /api/friends`
 
 ```json
-[{"name":"benarmstrong","displayName":"Benedict Armstrong","image":"…","state":"friends","agents":"ping"}]
+[{"name":"benarmstrong","displayName":"Benedict Armstrong","image":"…","state":"friends"}]
 ```
 
 `state` is `friends`, `asked` (the caller added them, they haven't added the caller yet) or `asking` (they added the caller).
-`agents` is the caller's setting for them.
+- `PUT /api/friends/<name>`: adds them, which accepts where they asked first.
+- `DELETE /api/friends/<name>`: removes them, which also declines or withdraws, and takes each out of the other's rooms.
 
-- `PUT /api/friends/<name>`, with `{"agents":"ping"|"fyi"}` or no body: adds them, which accepts where they asked first, or changes the setting. `agents` is `fyi` where never set.
-- `DELETE /api/friends/<name>`: removes them, which also declines or withdraws.
+Adding friends and members, and opening a room to its address, is the person's alone, signed in in the browser: a token gets 403.
 
-The setting is for the clients of the caller's agents to honour:
-a chat message from a friend's agent that pings one of the caller's agents counts as an fyi where the setting is `fyi`.
+## Tokens
 
-## Agents
-
-`GET /api/agents`: the agents holding a token of the caller's.
+`GET /api/tokens`: the caller's tokens, oldest first.
 
 ```json
-[{"id":"s_…","name":"claude","kind":"code","created":"2026-11-09T00:10:00Z"},
- {"id":"o_…","name":"Claude Code","kind":"oauth","created":"2026-11-09T00:12:00Z"}]
+[{"id":"s_…","name":"claude","created":"2026-11-09T00:10:00Z"},
+ {"id":"o_…","name":"Claude Code","created":"2026-11-09T00:12:00Z"}]
 ```
 
-Each token is one row: a one-time code (`code`), or one sign-in of an MCP client (`oauth`), so two Claude Codes signed in are two rows.
-`name` is the name the agent connected with, or the name of its MCP client. `id` needs no encoding in a path.
+`name` is the name the agent asked for the OTP with, or the name of its MCP client, so two Claude Codes signed in are two tokens.
+`id` needs no encoding in a path.
 
-- `DELETE /api/agents/<id>`: revokes the token. The service refuses it at once, and the relay cuts the agent off within a few seconds, a receive already waiting included.
+- `DELETE /api/tokens/<id>`: revokes the token. The service refuses it at once, and the relay cuts its agent off within a few seconds, a receive already waiting included.
+  An MCP client then asks the person again before it gets another.
 
-## Connecting an agent
+## Getting a token
 
-An agent with a shell connects with a one-time code, RFC 8628's device authorization:
+An agent with a shell gets a token with an OTP, RFC 8628's device authorization:
 
 ```sh
 curl -s -H 'Content-Type: application/json' \
@@ -99,7 +99,7 @@ curl -s -H 'Content-Type: application/json' \
 
 `<agent>` is the agent's own part of its name, such as `claude`.
 It returns `user_code`, `verification_uri_complete`, `device_code` and `interval`.
-The agent gives its person the link in `verification_uri_complete`, where they sign in and approve the code.
+The agent gives its person the link in `verification_uri_complete`, where they sign in and approve the OTP.
 Meanwhile it asks for the token every `interval` seconds:
 
 ```sh
@@ -116,7 +116,7 @@ These are Better Auth's own endpoints, under `/api/auth/`; the account page call
 
 - Sign in: `POST /api/auth/sign-in/social` with `{"provider":"github","callbackURL":"/account/"}`, which returns `{"url":…,"redirect":true}`: go to `url`.
 - Sign out: `POST /api/auth/sign-out`.
-- The one-time code: `GET /api/auth/device?user_code=<code>` claims it for the signed-in caller, and returns the agent that asks as `client_id`.
+- The OTP: `GET /api/auth/device?user_code=<code>` claims it for the signed-in caller, and returns the agent that asks as `client_id`, and when and from which address it asked as `requested` and `from`.
   Then `POST /api/auth/device/approve` or `/api/auth/device/deny` with `{"userCode":"<code>"}`.
   The page is `/account/device/?user_code=<code>`.
 - OAuth, for MCP clients: the authorization server's endpoints are under `/api/auth/oauth2/`, its metadata at `/.well-known/oauth-authorization-server/api/auth`.
@@ -130,17 +130,16 @@ These are Better Auth's own endpoints, under `/api/auth/`; the account page call
 The MCP server is the protected resource `https://vibetogether.agentics.lwirth.com/mcp`.
 Its metadata, per RFC 9728, is served by this service at `/.well-known/oauth-protected-resource/mcp`.
 It answers a request without a valid token with 401 and `WWW-Authenticate: Bearer resource_metadata="https://vibetogether.agentics.lwirth.com/.well-known/oauth-protected-resource/mcp"`.
-It checks a token with `GET /api/me`, and joins rooms with the agent's token as the bearer.
+It checks a token with `GET /api/me`, lists rooms with `GET /api/rooms`, and joins rooms with the agent's token as the bearer.
 
 ## The relay
 
 The relay asks this service, as its access service, on the loopback only:
 
-- `POST /agentwire/join` with `{"session":"<token in the link>","name":"<name>","token":"<token>"|null,"guarded":true|false}`:
+- `POST /agentwire/join` with `{"session":"<the secret in the address>","name":"<name>","token":"<token>"|null,"owned":true|false}`:
   200 with `{"account":"<name>"|null}` where the name may take part, 403 with one line of text where not.
   A token, where one is given, must be valid, and the name that person's or one of their agents', and `account` is that person's name.
-  A session that is no room is open to anyone, a name without a token included, as without accounts: the account is what verifies a name.
-  A room is open only to a token of its owner or of a member.
-  Rooms are the guarded sessions, which this service creates with `POST <relay>/v2/s?guarded`; a guarded session that is no room is open to no one.
-  The relay asks this again for every request of a participant that joined with a token, so a revoked token is cut off.
-- `GET /agentwire/sessions/<token in the link>`: `{"lasting":true}` for a room, 404 for any other session.
+  A room open to its members takes only a token of its owner or of a member; any other session takes anyone.
+  Rooms are the owned sessions, which this service creates with `POST <relay>/v2/s?owned`; an owned session that is no room any more was deleted, and takes no one.
+  The relay asks this again for every request of a participant in an owned session or with a token, so a revoked token is cut off.
+- `GET /agentwire/sessions/<the secret in the address>`: 200 for a room, which keeps it, and 404 for any other session.

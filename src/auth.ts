@@ -8,7 +8,6 @@ import { bearer, deviceAuthorization } from "better-auth/plugins";
 import { config } from "./config.ts";
 import { db, migrate } from "./db.ts";
 import { isNamePart } from "./names.ts";
-import { createRoom } from "./rooms.ts";
 
 /** The hash under which the OAuth provider stores a token, which `caller` looks tokens up by. */
 export function tokenHash(token: string): string {
@@ -53,7 +52,7 @@ const options = {
 		},
 	},
 	session: {
-		// A session from a one-time code is an agent's token, which lives while it is used.
+		// A session from an OTP is a token, which lives while it is used.
 		expiresIn: 90 * day,
 		updateAge: day,
 		additionalFields: {
@@ -61,13 +60,6 @@ const options = {
 		},
 	},
 	databaseHooks: {
-		user: {
-			create: {
-				after: async (user) => {
-					await createRoom(user.id, "agents");
-				},
-			},
-		},
 		session: {
 			create: {
 				before: async (session, ctx) => {

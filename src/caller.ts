@@ -26,7 +26,7 @@ function oauthCaller(token: string): Caller | undefined {
 
 /**
  * The account a request is from: by the session cookie, or a bearer token,
- * which is a session token from a one-time code or an OAuth access token.
+ * which is a session token from an OTP or an OAuth access token.
  */
 export async function callerOf(headers: Headers): Promise<Caller | undefined> {
 	const bearer = bearerOf(headers);

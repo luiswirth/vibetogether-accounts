@@ -4,16 +4,16 @@ import { db } from "./db.ts";
 import { isUnder } from "./names.ts";
 
 /**
- * The relay's access service: whether a token may take part in a session under a name,
- * and whether a session lasts. Reached on the loopback only.
+ * The relay's access service: whether a name may join a session, with a token or without,
+ * and whether an owned session is still a room. Reached on the loopback only.
  */
 export const access = new Hono();
 
-type Room = { id: string; owner: string };
+type Room = { id: string; owner: string; open: "members" | "link" };
 
 function roomBySession(session: string): Room | undefined {
 	return db
-		.prepare("SELECT id, owner FROM room WHERE session = ?")
+		.prepare("SELECT id, owner, open FROM room WHERE session = ?")
 		.get(session) as Room | undefined;
 }
 
@@ -31,7 +31,7 @@ access.post("/join", async (c) => {
 		session?: unknown;
 		name?: unknown;
 		token?: unknown;
-		guarded?: unknown;
+		owned?: unknown;
 	} | null;
 	const session = body?.session;
 	const name = body?.name;
@@ -42,7 +42,7 @@ access.post("/join", async (c) => {
 		(token !== null && typeof token !== "string")
 	)
 		return c.text(
-			'The body is {"session":"…","name":"…","token":"…"|null}.',
+			'The body is {"session":"…","name":"…","token":"…"|null,"owned":true|false}.',
 			400,
 		);
 	const caller = token ? await callerOfToken(token) : undefined;
@@ -57,20 +57,23 @@ access.post("/join", async (c) => {
 			403,
 		);
 	const room = roomBySession(session);
-	// A guarded session is meant to be a room, so one that is none lets no one in.
-	if (!room && body?.guarded === true)
-		return c.text("This session is guarded, but it is no room.", 403);
-	if (room && !caller)
-		return c.text(
-			"This room is only for its members: join with a token of your account, as Authorization: Bearer <token>.",
-			403,
-		);
-	if (room && caller && !isInRoom(room, caller.id))
-		return c.text(`${caller.login} is no member of this room.`, 403);
+	// The service owns every owned session as a room, so one it doesn't know was deleted.
+	if (!room && body?.owned === true)
+		return c.text("This room was deleted.", 403);
+	if (room?.open === "members") {
+		if (!caller)
+			return c.text(
+				"This room is open to its members only: join with a token of your account, as Authorization: Bearer <token>.",
+				403,
+			);
+		if (!isInRoom(room, caller.id))
+			return c.text(`${caller.login} is no member of this room.`, 403);
+	}
 	return c.json({ account: caller?.login ?? null });
 });
 
-access.get("/sessions/:session", (c) => {
-	const room = roomBySession(c.req.param("session"));
-	return room ? c.json({ lasting: true }) : c.json({ lasting: false }, 404);
-});
+access.get("/sessions/:session", (c) =>
+	roomBySession(c.req.param("session"))
+		? c.json({})
+		: c.text("No such room.", 404),
+);
