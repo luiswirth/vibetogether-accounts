@@ -53,7 +53,7 @@ access.post("/join", async (c) => {
 		);
 	if (caller && !isAgentOf(name, caller.login))
 		return c.text(
-			`The token is for ${caller.login}'s agents, so it joins as ${caller.login}/<agent>, never as ${caller.login}.`,
+			`The token is ${caller.login}'s, so it joins only as ${caller.login}/<agent>.`,
 			403,
 		);
 	const room = roomBySession(session);
